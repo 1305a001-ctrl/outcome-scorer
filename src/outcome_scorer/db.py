@@ -1,0 +1,138 @@
+"""Postgres client for outcome-scorer."""
+import json
+import logging
+from datetime import datetime
+from uuid import UUID
+
+import asyncpg
+
+from outcome_scorer.settings import settings
+
+log = logging.getLogger(__name__)
+
+
+class DB:
+    def __init__(self) -> None:
+        self._pool: asyncpg.Pool | None = None
+
+    @property
+    def pool(self) -> asyncpg.Pool:
+        if self._pool is None:
+            raise RuntimeError("DB not connected — call connect() first")
+        return self._pool
+
+    async def connect(self) -> None:
+        if not settings.aicore_db_url:
+            raise RuntimeError("AICORE_DB_URL not set")
+        self._pool = await asyncpg.create_pool(
+            settings.aicore_db_url, min_size=1, max_size=3, init=_init_connection,
+        )
+
+    async def close(self) -> None:
+        if self._pool:
+            await self._pool.close()
+
+    # ─── Reads ──────────────────────────────────────────────────────────────
+
+    async def signals_to_score(
+        self, horizon_hours: int, min_age_hours: int,
+    ) -> list[asyncpg.Record]:
+        """Signals (a) older than horizon, (b) without an outcome row at this horizon yet."""
+        if horizon_hours % 24 == 0 and horizon_hours >= 24:
+            horizon_label_d = f"{horizon_hours // 24}d"
+        else:
+            horizon_label_d = f"{horizon_hours}h"
+        return await self.pool.fetch(
+            """
+            SELECT s.id, s.strategy_id, s.asset, s.direction, s.published_at, s.confidence
+            FROM market_signals s
+            WHERE s.published_at <= NOW() - $1::interval
+              AND NOT EXISTS (
+                SELECT 1 FROM signal_outcomes o
+                WHERE o.signal_id = s.id AND o.evaluation_horizon = $2
+              )
+            ORDER BY s.published_at
+            """,
+            f"{horizon_hours} hours",
+            horizon_label_d,
+        )
+
+    # ─── Writes ─────────────────────────────────────────────────────────────
+
+    async def insert_outcome(
+        self,
+        *,
+        signal_id: UUID,
+        horizon_label: str,
+        outcome: str,
+        price_at_signal: float | None,
+        price_at_evaluation: float | None,
+        price_change_pct: float | None,
+        notes: str | None = None,
+    ) -> None:
+        await self.pool.execute(
+            """
+            INSERT INTO signal_outcomes
+              (signal_id, evaluation_horizon, outcome,
+               price_at_signal, price_at_evaluation, price_change_pct, notes)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            """,
+            signal_id, horizon_label, outcome,
+            price_at_signal, price_at_evaluation, price_change_pct, notes,
+        )
+
+    async def upsert_consistency(
+        self,
+        *,
+        strategy_id: UUID,
+        asset: str,
+        period_start: datetime,
+        period_end: datetime,
+        horizon_label: str,
+        total_signals: int,
+        correct_signals: int,
+        accuracy: float | None,
+        expectancy: float | None,
+    ) -> None:
+        # consistency_scores has no UNIQUE → we insert one row per recompute and keep history.
+        await self.pool.execute(
+            """
+            INSERT INTO consistency_scores
+              (strategy_id, asset, period_start, period_end, horizon,
+               total_signals, correct_signals, accuracy, expectancy)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+            """,
+            strategy_id, asset, period_start, period_end, horizon_label,
+            total_signals, correct_signals, accuracy, expectancy,
+        )
+
+    async def consistency_input(self, horizon_label: str) -> list[asyncpg.Record]:
+        """Aggregated outcome rows grouped by (strategy_id, asset, horizon)."""
+        return await self.pool.fetch(
+            """
+            SELECT
+              s.strategy_id,
+              s.asset,
+              MIN(s.published_at) AS period_start,
+              MAX(s.published_at) AS period_end,
+              COUNT(*) AS total_signals,
+              COUNT(*) FILTER (WHERE o.outcome = 'win') AS correct_signals,
+              AVG(o.price_change_pct) FILTER (WHERE s.direction = 'long')  AS avg_pct_long,
+              AVG(o.price_change_pct) FILTER (WHERE s.direction = 'short') AS avg_pct_short,
+              COUNT(*) FILTER (WHERE s.direction = 'long')  AS n_long,
+              COUNT(*) FILTER (WHERE s.direction = 'short') AS n_short
+            FROM signal_outcomes o
+            JOIN market_signals s ON s.id = o.signal_id
+            WHERE o.evaluation_horizon = $1
+            GROUP BY s.strategy_id, s.asset
+            """,
+            horizon_label,
+        )
+
+
+async def _init_connection(conn: asyncpg.Connection) -> None:
+    await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
+    await conn.set_type_codec("json", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
+
+
+db = DB()
