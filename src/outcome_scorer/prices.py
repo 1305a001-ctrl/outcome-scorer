@@ -55,7 +55,12 @@ async def _binance_close_at(symbol: str, ts: datetime) -> float | None:
 
 
 async def _finnhub_close_at(symbol: str, ts: datetime) -> float | None:
-    """Fetch a single 1h candle for the given symbol containing ts."""
+    """Fetch a single 1h candle for the given symbol containing ts.
+
+    US equities only trade during RTH (9:30-16:00 ET, weekdays). Signals that
+    fire outside those hours have no in-window candle, so we fall back to the
+    nearest trading-hour close (±96h covers a full long-weekend gap).
+    """
     if not settings.finnhub_key:
         return None
     start = int(ts.timestamp())
@@ -68,17 +73,17 @@ async def _finnhub_close_at(symbol: str, ts: datetime) -> float | None:
         )
         r.raise_for_status()
         data = r.json()
-        if data.get("s") != "ok":
-            # 'no_data' is normal outside RTH — caller should fall back to a wider window
-            return await _finnhub_close_nearest(symbol, ts)
         closes = data.get("c") or []
-        return float(closes[0]) if closes else None
+        if data.get("s") == "ok" and closes:
+            return float(closes[0])
+        # Either status not ok, or empty closes (both happen outside RTH) → fall back
+        return await _finnhub_close_nearest(symbol, ts)
 
 
 async def _finnhub_close_nearest(symbol: str, ts: datetime) -> float | None:
-    """Fallback: widen the window to ±48h so we get the nearest available trading-hour close."""
-    start = int((ts - timedelta(hours=48)).timestamp())
-    end = int((ts + timedelta(hours=48)).timestamp())
+    """Fallback: widen window to ±96h so we get the nearest RTH close (covers long weekends)."""
+    start = int((ts - timedelta(hours=96)).timestamp())
+    end = int((ts + timedelta(hours=96)).timestamp())
     async with httpx.AsyncClient(timeout=15.0) as c:
         r = await c.get(
             f"{settings.finnhub_base_url}/stock/candle",
