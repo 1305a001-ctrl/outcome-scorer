@@ -1,7 +1,7 @@
 """Postgres client for outcome-scorer."""
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from uuid import UUID
 
 import asyncpg
@@ -46,14 +46,14 @@ class DB:
             """
             SELECT s.id, s.strategy_id, s.asset, s.direction, s.published_at, s.confidence
             FROM market_signals s
-            WHERE s.published_at <= NOW() - $1
+            WHERE s.published_at <= NOW() - make_interval(hours => $1)
               AND NOT EXISTS (
                 SELECT 1 FROM signal_outcomes o
                 WHERE o.signal_id = s.id AND o.evaluation_horizon = $2
               )
             ORDER BY s.published_at
             """,
-            timedelta(hours=horizon_hours),
+            horizon_hours,
             horizon_label_d,
         )
 
