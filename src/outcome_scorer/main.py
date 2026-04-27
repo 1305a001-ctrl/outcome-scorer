@@ -47,10 +47,12 @@ async def score_all() -> dict:
                 p_eval = await price_at(s["asset"], eval_ts)
 
                 if p_signal is None or p_eval is None:
+                    # 'expired' = horizon ended without a resolvable outcome (no price feed,
+                    # API gated, asset doesn't trade then). Excluded from accuracy stats.
                     await db.insert_outcome(
                         signal_id=s["id"],
                         horizon_label=h_label,
-                        outcome="flat",
+                        outcome="expired",
                         price_at_signal=p_signal,
                         price_at_evaluation=p_eval,
                         price_change_pct=None,

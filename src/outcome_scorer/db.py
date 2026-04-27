@@ -114,7 +114,11 @@ class DB:
         )
 
     async def consistency_input(self, horizon_label: str) -> list[asyncpg.Record]:
-        """Aggregated outcome rows grouped by (strategy_id, asset, horizon)."""
+        """Aggregated outcome rows grouped by (strategy_id, asset, horizon).
+
+        Excludes 'expired' outcomes (horizon ended with no resolvable price feed)
+        so accuracy is a fair fraction of *evaluable* signals only.
+        """
         return await self.pool.fetch(
             """
             SELECT
@@ -131,6 +135,7 @@ class DB:
             FROM signal_outcomes o
             JOIN market_signals s ON s.id = o.signal_id
             WHERE o.evaluation_horizon = $1
+              AND o.outcome != 'expired'
             GROUP BY s.strategy_id, s.asset
             """,
             horizon_label,

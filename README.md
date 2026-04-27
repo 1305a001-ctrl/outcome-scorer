@@ -10,8 +10,10 @@ For system context, read [`infra-core/docs/ARCHITECTURE.md`](https://github.com/
 2. Skips any that already have a `signal_outcomes` row at that horizon (idempotent — safe to re-run).
 3. Fetches historical 1h close prices:
    - Crypto via Binance public klines API (no key)
-   - US equities via Finnhub `/stock/candle` (uses `FINNHUB_KEY`)
-   - KLSE / unsupported → marks outcome as `flat` with note `no price data`
+   - US equities via Finnhub `/stock/candle` — **requires Finnhub Premium**; the free tier returns HTTP 403 on this endpoint. Until a paid key (or Alpaca historical bars adapter) is wired, US equity outcomes are recorded as `expired`.
+   - KLSE / unsupported → recorded as `expired` with note `no price data`
+
+`expired` outcomes are excluded from `consistency_scores.accuracy` so the metric represents only *evaluable* signals.
 4. Scores: `long → win if pct > +threshold`, `short → win if pct < -threshold`, else flat. (`FLAT_THRESHOLD_PCT` default 0.5%.)
 5. Recomputes `consistency_scores` per (strategy × asset × horizon).
 
