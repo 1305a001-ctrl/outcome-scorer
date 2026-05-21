@@ -51,7 +51,8 @@ class ValidationResult:
     """
 
     passed: bool
-    """Overall gate: PBO < 0.5 AND DSR > 0 (PBO ignored if undefined)."""
+    """Overall gate: DSR > ``dsr_pass`` AND PBO < ``pbo_pass`` (PBO ignored
+    when undefined — i.e. a single config). See :func:`validate`."""
     reason: str
     """Human-readable explanation of the pass/fail decision."""
 
