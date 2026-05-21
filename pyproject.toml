@@ -19,7 +19,24 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.4"]
+# Quant Rigor validation layer (outcome_scorer.validation). Pinned to the
+# versions on ai-staging; intentionally NOT mlfinlab (abandoned, breaks on
+# numpy 2.x) — the four techniques are implemented directly on numpy/pandas/
+# scipy (no scikit-learn needed: the CV splitters are hand-rolled).
+validation = [
+    "numpy==2.4.6",
+    "pandas==2.3.3",
+    "scipy==1.17.1",
+]
+# dev includes the validation deps so CI runs the validation tests.
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "numpy==2.4.6",
+    "pandas==2.3.3",
+    "scipy==1.17.1",
+]
 
 [tool.ruff]
 line-length = 100
